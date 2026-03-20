@@ -312,77 +312,222 @@ body{font-family:"Figtree",sans-serif;background:var(--bg);color:var(--text);-we
 <div class="tw" id="tw"></div>
 
 <script>
-const CLIENT_ID='865372017316-1ir04ugkdhpd94leeh7gt7069ksl14h3.apps.googleusercontent.com';
-let userInfo=null,ytToken=null,ytPlayer,ytReady=false;
+// ═══════════════════════════════════════════════════════
+//  CONFIG
+//  Google Client ID  — for Sign In only (name/photo)
+//  YouTube API Key   — for all music data (free, no OAuth)
+//  Get API key: console.cloud.google.com
+//  → APIs & Services → Library → YouTube Data API v3 → Enable
+//  → Credentials → Create Credentials → API Key
+// ═══════════════════════════════════════════════════════
+const CLIENT_ID = '865372017316-1ir04ugkdhpd94leeh7gt7069ksl14h3.apps.googleusercontent.com';
+let YT_KEY = localStorage.getItem('melo_yk') || '';
+
+// ── State ─────────────────────────────────────────────
+let userInfo=null;
+let ytPlayer,ytReady=false;
 let queue=[],qIdx=-1,playing=false,doShuffle=false,repeatMode=0,vol=80,muted=false;
 let liked=[],currentId=null,progTimer=null,searchTimer=null,view='home',acctOpen=false;
 
+// ── Google Sign-In (ID token only — no YouTube scope) ─
 function initGoogle(){
-  google.accounts.id.initialize({client_id:CLIENT_ID,callback:onSignedIn,auto_select:false});
-  google.accounts.id.renderButton(ge('g-btn'),{theme:'filled_black',size:'large',shape:'pill',text:'signin_with',width:260});
+  google.accounts.id.initialize({
+    client_id: CLIENT_ID,
+    callback:  onSignedIn,
+    auto_select: false,
+  });
+  google.accounts.id.renderButton(ge('g-btn'),{
+    theme:'filled_black',size:'large',shape:'pill',text:'signin_with',width:260
+  });
   google.accounts.id.prompt();
 }
+
+let _tc = null;
 function onSignedIn(cr){
-  const p=JSON.parse(atob(cr.credential.split('.')[1]));
-  userInfo={name:p.name,email:p.email,avatar:p.picture};
-  localStorage.setItem('melo_u',JSON.stringify(userInfo));
-  const tc=google.accounts.oauth2.initTokenClient({
-    client_id:CLIENT_ID,
-    scope:'https://www.googleapis.com/auth/youtube.readonly',
-    callback:r=>{if(r.access_token){ytToken=r.access_token;localStorage.setItem('melo_t',r.access_token);localStorage.setItem('melo_te',Date.now()+(r.expires_in||3600)*1000);}enterApp();},
-    error_callback:()=>enterApp(),
+  const p = JSON.parse(atob(cr.credential.split('.')[1]));
+  userInfo = { name:p.name, email:p.email, avatar:p.picture };
+  localStorage.setItem('melo_u', JSON.stringify(userInfo));
+  liked = JSON.parse(localStorage.getItem('melo_liked_'+p.email)||'[]');
+
+  // Request YouTube read access
+  _tc = google.accounts.oauth2.initTokenClient({
+    client_id: CLIENT_ID,
+    scope: 'https://www.googleapis.com/auth/youtube.readonly',
+    callback: r => {
+      if(r.access_token){
+        ytToken = r.access_token;
+        localStorage.setItem('melo_t', r.access_token);
+        localStorage.setItem('melo_te', Date.now()+(r.expires_in||3600)*1000);
+      }
+      enterApp();
+    },
+    error_callback: () => enterApp(),
   });
-  tc.requestAccessToken({prompt:''});
+  _tc.requestAccessToken({ prompt: 'consent' });
 }
+
 function enterApp(){
-  if(!userInfo)return;
-  liked=JSON.parse(localStorage.getItem('melo_liked_'+userInfo.email)||'[]');
-  [ge('user-av'),ge('acct-av')].forEach(el=>{if(el&&userInfo.avatar)el.src=userInfo.avatar;});
-  ge('acct-name').textContent=userInfo.name;
-  ge('acct-email').textContent=userInfo.email;
+  if(!userInfo) return;
+  [ge('user-av'),ge('acct-av')].forEach(el=>{ if(el&&userInfo.avatar) el.src=userInfo.avatar; });
+  ge('acct-name').textContent  = userInfo.name;
+  ge('acct-email').textContent = userInfo.email;
   ge('auth').classList.add('out');
   ge('app').classList.add('on');
+  if(!YT_KEY){ showKeyPrompt(); return; }
   renderHome();
 }
+
 function signOut(){
   google.accounts.id.disableAutoSelect();
-  ['melo_u','melo_t','melo_te'].forEach(k=>localStorage.removeItem(k));
-  userInfo=null;ytToken=null;liked=[];
-  ge('auth').classList.remove('out');ge('app').classList.remove('on');
-  ge('acct-menu').classList.remove('on');acctOpen=false;
-  toast('Signed out');setTimeout(initGoogle,200);
+  localStorage.removeItem('melo_u');
+  userInfo=null; liked=[];
+  ge('auth').classList.remove('out');
+  ge('app').classList.remove('on');
+  ge('acct-menu').classList.remove('on');
+  acctOpen=false;
+  toast('Signed out');
+  setTimeout(initGoogle,200);
 }
 
+// ── API Key prompt (shown once if no key saved) ────────
+function showKeyPrompt(){
+  const sa=ge('scroll');
+  sa.innerHTML = '';
+  const wrap=document.createElement('div');
+  wrap.style.cssText='padding:32px 24px;display:flex;flex-direction:column;align-items:center;gap:16px;text-align:center';
+  wrap.innerHTML = `
+    <div style="font-size:2.5rem;opacity:.35">&#128273;</div>
+    <div style="font-size:1rem;font-weight:700;color:var(--t2)">Add YouTube API Key</div>
+    <div style="font-size:.82rem;color:var(--t3);line-height:1.65;max-width:260px">
+      Free key from <strong style="color:var(--t2)">console.cloud.google.com</strong><br>
+      &#8594; APIs &amp; Services &#8594; Library<br>
+      &#8594; YouTube Data API v3 &#8594; Enable<br>
+      &#8594; Credentials &#8594; API Key &#8594; Copy
+    </div>
+    <input id="yk-inp" type="text" placeholder="AIza..."
+      style="width:100%;max-width:300px;background:var(--c2);border:1px solid rgba(255,255,255,.15);border-radius:12px;color:var(--text);font-family:inherit;font-size:.85rem;padding:12px 16px;outline:none"
+      onkeydown="if(event.key==='Enter')saveKey()"/>
+    <button onclick="saveKey()"
+      style="background:var(--acc);border:none;border-radius:12px;color:#fff;font-family:inherit;font-weight:700;font-size:.9rem;padding:13px 32px;cursor:pointer;transition:opacity .15s;width:100%;max-width:300px">
+      Save &amp; Start Listening
+    </button>`;
+  sa.appendChild(wrap);
+}
+
+function saveKey(){
+  const val = ge('yk-inp')?.value?.trim();
+  if(!val || val.length < 10){ toast('Paste a valid API key'); return; }
+  YT_KEY = val;
+  localStorage.setItem('melo_yk', val);
+  toast('API key saved!');
+  renderHome();
+}
+
+// ── YouTube Data API (API key — no OAuth needed) ───────
 async function ytFetch(url){
-  if(!ytToken)throw new Error('Not signed in with YouTube access');
-  const r=await fetch(url,{headers:{Authorization:'Bearer '+ytToken}});
-  if(r.status===401){ytToken=null;localStorage.removeItem('melo_t');throw new Error('Session expired — sign out and back in');}
-  const d=await r.json();
-  if(d.error)throw new Error(d.error.message);
+  let r;
+  if(ytToken){
+    // Use OAuth bearer token (from Google sign-in) - no API key needed
+    r = await fetch(url, { headers:{ Authorization:'Bearer '+ytToken } });
+    if(r.status===401){
+      ytToken=null;
+      localStorage.removeItem('melo_t');
+      if(_tc) _tc.requestAccessToken({prompt:'consent'});
+      throw new Error('Session expired — signing you in again');
+    }
+  } else if(YT_KEY){
+    // Fallback: API key
+    const sep = url.includes('?') ? '&' : '?';
+    r = await fetch(url + sep + 'key=' + YT_KEY);
+  } else {
+    throw new Error('No YouTube access yet. Please sign out and sign back in.');
+  }
+  const d = await r.json();
+  if(d.error) throw new Error(d.error.message);
   return d;
 }
-async function ytSearch(q,n=20){
-  const d=await ytFetch('https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&videoCategoryId=10&q='+encodeURIComponent(q)+'&maxResults='+n+'&regionCode=US');
-  return(d.items||[]).map(toSong);
+
+async function ytSearch(q, n=20){
+  const d = await ytFetch(
+    'https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&videoCategoryId=10&q='+
+    encodeURIComponent(q)+'&maxResults='+n+'&regionCode=US'
+  );
+  return (d.items||[]).map(toSong);
 }
-function toSong(it){return{id:it.id.videoId||it.id,title:clean(it.snippet.title),artist:it.snippet.channelTitle.replace(/ - Topic$/,'').replace(/VEVO$/,'').replace(/ Official$/,'').replace(/ Music$/,''),thumb:it.snippet.thumbnails?.medium?.url||it.snippet.thumbnails?.default?.url||''};}
-function clean(t){return(t||'').replace(/&amp;/g,'&').replace(/&#39;/g,"'").replace(/&quot;/g,'"').replace(/&lt;/g,'<').replace(/&gt;/g,'>');}
 
-window.onYouTubeIframeAPIReady=()=>{ytPlayer=new YT.Player('yt-player',{height:'1',width:'1',playerVars:{autoplay:0,controls:0,playsinline:1},events:{onReady:()=>{ytReady=true;ytPlayer.setVolume(vol);},onStateChange:e=>{const S=YT.PlayerState;if(e.data===S.PLAYING){playing=true;updB();startTimer();}if(e.data===S.PAUSED){playing=false;updB();}if(e.data===S.ENDED){onEnd();}if(e.data===S.BUFFERING){ge('mini-play').textContent=ge('fp-pl').textContent='...';}},onError:()=>{toast('Playback error');next();}}});};
-const ys=document.createElement('script');ys.src='https://www.youtube.com/iframe_api';document.head.appendChild(ys);
-function onEnd(){if(repeatMode===2){ytPlayer.seekTo(0);ytPlayer.playVideo();}else if(repeatMode===1||qIdx<queue.length-1){next();}else{playing=false;updB();stopTimer();}}
+function toSong(it){
+  return {
+    id:     it.id.videoId||it.id,
+    title:  clean(it.snippet.title),
+    artist: it.snippet.channelTitle
+              .replace(/ - Topic$/,'').replace(/VEVO$/,'')
+              .replace(/ Official$/,'').replace(/ Music$/,''),
+    thumb:  it.snippet.thumbnails?.medium?.url
+         || it.snippet.thumbnails?.default?.url || '',
+  };
+}
+function clean(t){
+  return(t||'').replace(/&amp;/g,'&').replace(/&#39;/g,"'")
+    .replace(/&quot;/g,'"').replace(/&lt;/g,'<').replace(/&gt;/g,'>');
+}
 
-function playSong(song){const ex=queue.findIndex(s=>s.id===song.id);if(ex!==-1){qIdx=ex;}else{queue.push(song);qIdx=queue.length-1;}loadTrack();}
-function addQ(song){if(queue.some(s=>s.id===song.id)){toast('Already in queue');return;}queue.push(song);toast('Added');if(queue.length===1){qIdx=0;loadTrack();}if(view==='queue')renderQueue();}
+// ── YT IFrame Player ──────────────────────────────────
+window.onYouTubeIframeAPIReady=()=>{
+  ytPlayer=new YT.Player('yt-player',{
+    height:'1',width:'1',
+    playerVars:{autoplay:0,controls:0,playsinline:1},
+    events:{
+      onReady:       ()=>{ytReady=true;ytPlayer.setVolume(vol);},
+      onStateChange: e=>{
+        const S=YT.PlayerState;
+        if(e.data===S.PLAYING){playing=true; updB();startTimer();}
+        if(e.data===S.PAUSED) {playing=false;updB();}
+        if(e.data===S.ENDED)  {onEnd();}
+        if(e.data===S.BUFFERING){ge('mini-play').textContent=ge('fp-pl').textContent='...';}
+      },
+      onError:()=>{toast('Playback error');next();}
+    }
+  });
+};
+const ys=document.createElement('script');
+ys.src='https://www.youtube.com/iframe_api';
+document.head.appendChild(ys);
+
+function onEnd(){
+  if(repeatMode===2){ytPlayer.seekTo(0);ytPlayer.playVideo();}
+  else if(repeatMode===1||qIdx<queue.length-1){next();}
+  else{playing=false;updB();stopTimer();}
+}
+
+// ── Playback ──────────────────────────────────────────
+function playSong(song){
+  const ex=queue.findIndex(s=>s.id===song.id);
+  if(ex!==-1){qIdx=ex;}else{queue.push(song);qIdx=queue.length-1;}
+  loadTrack();
+}
+function addQ(song){
+  if(queue.some(s=>s.id===song.id)){toast('Already in queue');return;}
+  queue.push(song);toast('Added');
+  if(queue.length===1){qIdx=0;loadTrack();}
+  if(view==='queue')renderQueue();
+}
 function loadTrack(){
   if(qIdx<0||qIdx>=queue.length)return;
   const s=queue[qIdx];currentId=s.id;
-  ge('mini-title').textContent=s.title;ge('mini-artist').textContent=s.artist;
-  ge('fp-title').textContent=s.title;ge('fp-artist').textContent=s.artist;
-  document.title=s.title+' — melo.';
+  ge('mini-title').textContent =s.title;
+  ge('mini-artist').textContent=s.artist;
+  ge('fp-title').textContent   =s.title;
+  ge('fp-artist').textContent  =s.artist;
+  document.title=s.title+' \u2014 melo.';
   const ma=ge('mini-art'),mp=ge('mini-ph'),fa=ge('fp-art'),fp=ge('fp-ph');
-  if(s.thumb){ma.src=s.thumb;ma.style.display='block';mp.style.display='none';fa.src=s.thumb;fa.style.display='block';fp.style.display='none';pullColor(s.thumb);}
-  else{ma.style.display='none';mp.style.display='flex';fa.style.display='none';fp.style.display='flex';}
+  if(s.thumb){
+    ma.src=s.thumb;ma.style.display='block';mp.style.display='none';
+    fa.src=s.thumb;fa.style.display='block';fp.style.display='none';
+    pullColor(s.thumb);
+  }else{
+    ma.style.display='none';mp.style.display='flex';
+    fa.style.display='none';fp.style.display='flex';
+  }
   updLike();
   if(view==='queue')renderQueue();
   if(ytReady){ytPlayer.loadVideoById(s.id);playing=true;updB();}
@@ -392,28 +537,32 @@ function next(){if(!queue.length)return;qIdx=doShuffle?rnd():(qIdx+1)%queue.leng
 function prev(){if(!queue.length)return;if(ytReady&&ytPlayer.getCurrentTime()>3){ytPlayer.seekTo(0);return;}qIdx=qIdx>0?qIdx-1:queue.length-1;loadTrack();}
 function rnd(){if(queue.length<=1)return 0;let n=Math.floor(Math.random()*queue.length);return n===qIdx?(n+1)%queue.length:n;}
 function toggleShuffle(){doShuffle=!doShuffle;ge('fp-sh').classList.toggle('on',doShuffle);toast(doShuffle?'Shuffle on':'Shuffle off');}
-function toggleRepeat(){repeatMode=(repeatMode+1)%3;ge('fp-rp').textContent=[String.fromCharCode(8635),String.fromCharCode(8635),String.fromCharCode(8635)+'1'][repeatMode];ge('fp-rp').classList.toggle('on',repeatMode>0);toast(['Repeat off','Repeat all','Repeat one'][repeatMode]);}
+function toggleRepeat(){repeatMode=(repeatMode+1)%3;ge('fp-rp').textContent=['\u21bb','\u21bb','\u21bb1'][repeatMode];ge('fp-rp').classList.toggle('on',repeatMode>0);toast(['Repeat off','Repeat all','Repeat one'][repeatMode]);}
 function setVol(e){const r=ge('fp-vt').getBoundingClientRect();vol=Math.round(Math.max(0,Math.min(100,(e.clientX-r.left)/r.width*100)));muted=false;applyVol();}
 function toggleMute(){muted=!muted;applyVol();}
-function applyVol(){const v=muted?0:vol;if(ytReady)ytPlayer.setVolume(v);ge('fp-vf').style.width=v+'%';ge('fp-vi').textContent=v===0?String.fromCharCode(128263):v<50?String.fromCharCode(128265):String.fromCharCode(128264);}
-function toggleLike(){if(!currentId)return;const s=queue[qIdx];if(!s)return;const i=liked.findIndex(x=>x.id===s.id);i===-1?(liked.push(s),toast(String.fromCharCode(9829)+' Liked')):(liked.splice(i,1),toast('Removed'));localStorage.setItem('melo_liked_'+(userInfo?.email||'x'),JSON.stringify(liked));updLike();if(view==='liked')renderLiked();}
-function updLike(){const on=currentId&&liked.some(s=>s.id===currentId);ge('fp-heart').textContent=on?String.fromCharCode(9829):String.fromCharCode(9825);ge('fp-heart').classList.toggle('on',on);}
+function applyVol(){const v=muted?0:vol;if(ytReady)ytPlayer.setVolume(v);ge('fp-vf').style.width=v+'%';ge('fp-vi').textContent=v===0?'\ud83d\udd07':v<50?'\ud83d\udd09':'\ud83d\udd08';}
+function toggleLike(){if(!currentId)return;const s=queue[qIdx];if(!s)return;const i=liked.findIndex(x=>x.id===s.id);i===-1?(liked.push(s),toast('\u2665 Liked')):(liked.splice(i,1),toast('Removed'));localStorage.setItem('melo_liked_'+(userInfo?.email||'x'),JSON.stringify(liked));updLike();if(view==='liked')renderLiked();}
+function updLike(){const on=currentId&&liked.some(s=>s.id===currentId);ge('fp-heart').textContent=on?'\u2665':'\u2661';ge('fp-heart').classList.toggle('on',on);}
 function startTimer(){stopTimer();progTimer=setInterval(tick,500);}
 function stopTimer(){if(progTimer){clearInterval(progTimer);progTimer=null;}}
 function tick(){if(!ytReady||!playing)return;try{const c=ytPlayer.getCurrentTime()||0,t=ytPlayer.getDuration()||0,p=t>0?c/t*100:0;ge('fp-pf').style.width=p+'%';ge('mini-pf').style.width=p+'%';ge('fp-curr').textContent=fmt(c);ge('fp-total').textContent=fmt(t);}catch(e){}}
 function seek(e){if(!ytReady||!currentId)return;const r=ge('fp-pt').getBoundingClientRect();ytPlayer.seekTo(((e.clientX-r.left)/r.width)*(ytPlayer.getDuration()||0));}
-function updB(){const ic=playing?String.fromCharCode(9646,9646):String.fromCharCode(9654);ge('mini-play').textContent=ic;ge('fp-pl').textContent=ic;ge('mini-eq').classList.toggle('on',playing);}
+function updB(){const ic=playing?'\u23f8':'\u25b6';ge('mini-play').textContent=ic;ge('fp-pl').textContent=ic;ge('mini-eq').classList.toggle('on',playing);}
 function pullColor(url){const img=new Image();img.crossOrigin='anonymous';img.src=url+'?t='+Date.now();img.onload=()=>{try{const c=document.createElement('canvas');c.width=c.height=14;const ctx=c.getContext('2d');ctx.drawImage(img,0,0,14,14);const d=ctx.getImageData(0,0,14,14).data;let r=0,g=0,b=0,n=0;for(let i=0;i<d.length;i+=4){const br=(d[i]+d[i+1]+d[i+2])/3;if(br>25&&br<225){r+=d[i];g+=d[i+1];b+=d[i+2];n++;}}if(!n)return;const mx=Math.max(r/n,g/n,b/n),sc=210/mx;r=Math.round(Math.min(255,(r/n)*sc));g=Math.round(Math.min(255,(g/n)*sc));b=Math.round(Math.min(255,(b/n)*sc));const root=document.documentElement;root.style.setProperty('--acc','rgb('+r+','+g+','+b+')');root.style.setProperty('--dr',r);root.style.setProperty('--dg',g);root.style.setProperty('--db',b);}catch(e){};};}
 function openFP(){ge('fp').classList.add('on');}
 function closeFP(){ge('fp').classList.remove('on');}
 function setView(v){view=v;['home','search','library','queue'].forEach(k=>ge('bn-'+k)?.classList.toggle('on',k===v));renderView();}
-function renderView(){if(view==='home')renderHome();if(view==='search')renderSearchEmpty();if(view==='library')renderLibrary();if(view==='queue')renderQueue();if(view==='liked')renderLiked();}
+function renderView(){if(view==='home')renderHome();else if(view==='search')renderSearchEmpty();else if(view==='library')renderLibrary();else if(view==='queue')renderQueue();else if(view==='liked')renderLiked();}
 function focusSearch(){setTimeout(()=>ge('s-inp').focus(),100);}
 
 async function renderHome(){
   showSkel();
   try{
-    const [a,b,c]=await Promise.allSettled([ytSearch('top hits 2024',12),ytSearch('new songs 2024',12),ytSearch('lofi chill beats',10)]);
+    const [a,b,c]=await Promise.allSettled([
+      ytSearch('top hits 2024',12),
+      ytSearch('new music 2024',12),
+      ytSearch('lofi chill beats',10),
+    ]);
     const sa=ge('scroll');sa.innerHTML='';
     const h=new Date().getHours(),g=h<12?'Good morning':h<18?'Good afternoon':'Good evening';
     const name=userInfo?.name?.split(' ')[0]||'';
@@ -421,59 +570,82 @@ async function renderHome(){
     top.innerHTML='<div style="font-size:1.6rem;font-weight:900;letter-spacing:-.04em;margin-bottom:2px">'+g+(name?', '+name:'')+'.</div><div style="font-size:.83rem;color:var(--t2)">Here is what is playing</div>';
     sa.appendChild(top);
     if(liked.length)sa.appendChild(makeCards('Liked Songs',liked.slice(0,10)));
-    if(a.status==='fulfilled'&&a.value.length)sa.appendChild(makeCards('Top Charts',a.value));
-    if(b.status==='fulfilled'&&b.value.length)sa.appendChild(makeRows('New Drops',b.value));
+    if(a.status==='fulfilled'&&a.value.length)sa.appendChild(makeCards('Top Charts \ud83d\udd25',a.value));
+    if(b.status==='fulfilled'&&b.value.length)sa.appendChild(makeRows('New Drops \u2728',b.value));
     if(c.status==='fulfilled'&&c.value.length)sa.appendChild(makeCards('Chill Vibes',c.value));
-    if(sa.children.length<=1)showErr('Songs could not load. Make sure YouTube Data API v3 is enabled in your Google Cloud project and that your email is added as a test user.');
-  }catch(e){showErr(e.message);}
+    if(sa.children.length<=1)showErr('Could not load songs. Check your YouTube API key.');
+  }catch(e){
+    if(e.message.includes('API key')||e.message.includes('keyInvalid')){
+      YT_KEY='';localStorage.removeItem('melo_yk');showKeyPrompt();
+    } else {
+      showErr(e.message);
+    }
+  }
 }
-async function renderLibrary(){
-  showSkel();
-  try{
-    const d=await ytFetch('https://www.googleapis.com/youtube/v3/playlists?part=snippet,contentDetails&mine=true&maxResults=20');
-    const sa=ge('scroll');sa.innerHTML='';
-    const sec=document.createElement('div');sec.className='sec';
-    sec.innerHTML='<div class="sec-row"><span class="sec-h">Your Library</span></div>';
-    if(!(d.items?.length)){sec.innerHTML+='<div class="empty"><div class="empty-ic">&#8862;</div><div class="empty-t">No playlists</div><div class="empty-s">Create playlists on YouTube and they will show here.</div></div>';}
-    else{d.items.forEach(pl=>{const chip=document.createElement('div');chip.style.cssText='display:flex;align-items:center;gap:11px;padding:11px 0;cursor:pointer;border-bottom:1px solid rgba(255,255,255,.05)';chip.onclick=()=>openPl(pl.id,pl.snippet.title);const th=pl.snippet.thumbnails?.default?.url;chip.innerHTML=(th?'<img style="width:48px;height:48px;border-radius:9px;object-fit:cover;flex-shrink:0" src="'+th+'"/>':`<div style="width:48px;height:48px;border-radius:9px;background:var(--c2);display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:1.2rem">&#9834;</div>`)+'<div style="flex:1;min-width:0"><div style="font-size:.87rem;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+esc(pl.snippet.title)+'</div><div style="font-size:.74rem;color:var(--t2);margin-top:2px">'+(pl.contentDetails?.itemCount||0)+' songs</div></div><span style="color:var(--t3);font-size:.9rem">&#8250;</span>';sec.appendChild(chip);});}
+
+function renderLibrary(){
+  const sa=ge('scroll');sa.innerHTML='';
+  const wrap=document.createElement('div');wrap.className='sec';
+  wrap.innerHTML='<div class="sec-row"><span class="sec-h">Library</span></div><div class="empty"><div class="empty-ic">\u2662</div><div class="empty-t">Liked Songs</div></div>';
+  if(liked.length){
+    const sec=makeRows('Liked Songs',liked);
     sa.appendChild(sec);
-  }catch(e){showErr(e.message);}
+  } else {
+    wrap.innerHTML='<div class="sec-row"><span class="sec-h">Library</span></div><div class="empty"><div class="empty-ic" style="opacity:.2">\u2661</div><div class="empty-t">No liked songs yet</div><div class="empty-s">Tap the heart while a song plays to save it here.</div></div>';
+    sa.appendChild(wrap);
+  }
 }
-async function openPl(id,title){
-  showSkel();
-  try{
-    const d=await ytFetch('https://www.googleapis.com/youtube/v3/playlistItems?part=snippet&playlistId='+id+'&maxResults=30');
-    const songs=(d.items||[]).map(it=>({id:it.snippet.resourceId?.videoId||'',title:clean(it.snippet.title),artist:(it.snippet.videoOwnerChannelTitle||'').replace(/ - Topic$/,'').replace(/VEVO$/,''),thumb:it.snippet.thumbnails?.medium?.url||it.snippet.thumbnails?.default?.url||''})).filter(s=>s.id);
-    const sa=ge('scroll');sa.innerHTML='';sa.appendChild(makeRows(title,songs));
-  }catch(e){showErr(e.message);}
+
+function renderLiked(){
+  const sa=ge('scroll');sa.innerHTML='';
+  if(!liked.length){
+    sa.innerHTML='<div class="empty"><div class="empty-ic" style="opacity:.2">\u2661</div><div class="empty-t">No liked songs</div><div class="empty-s">Tap the heart while a song plays.</div></div>';
+  } else {
+    sa.appendChild(makeRows('Liked Songs',liked));
+  }
 }
-function renderLiked(){const sa=ge('scroll');sa.innerHTML='';if(!liked.length){sa.innerHTML='<div class="empty"><div class="empty-ic">&#9825;</div><div class="empty-t">No liked songs</div><div class="empty-s">Tap the heart while a song plays.</div></div>';}else{sa.appendChild(makeRows('Liked Songs',liked));}}
+
 function renderQueue(){
   const sa=ge('scroll');sa.innerHTML='';
   const sec=document.createElement('div');sec.className='sec';
   const hdr=document.createElement('div');hdr.className='sec-row';
   const h=document.createElement('span');h.className='sec-h';h.textContent='Queue';hdr.appendChild(h);
-  if(queue.length){const cl=document.createElement('span');cl.className='sec-all';cl.textContent='Clear';cl.onclick=()=>{queue=[];qIdx=-1;renderQueue();toast('Queue cleared');};hdr.appendChild(cl);}
+  if(queue.length){
+    const cl=document.createElement('span');cl.className='sec-all';cl.textContent='Clear';
+    cl.onclick=()=>{queue=[];qIdx=-1;renderQueue();toast('Queue cleared');};
+    hdr.appendChild(cl);
+  }
   sec.appendChild(hdr);
   if(!queue.length){
-    sec.innerHTML+='<div class="empty"><div class="empty-ic">&#9776;</div><div class="empty-t">Queue is empty</div><div class="empty-s">Tap + on any song to add it.</div></div>';
+    const e=document.createElement('div');e.className='empty';
+    e.innerHTML='<div class="empty-ic" style="opacity:.2">\u2630</div><div class="empty-t">Queue is empty</div><div class="empty-s">Tap + on any song to add it.</div>';
+    sec.appendChild(e);
   } else {
     const rows=document.createElement('div');rows.className='rows';
     queue.forEach((s,i)=>{
       const div=document.createElement('div');
       div.className='row'+(i===qIdx?' np':'');
       div.onclick=()=>{qIdx=i;loadTrack();};
-      div.innerHTML=(s.thumb?'<img class="row-art" src="'+s.thumb+'" alt=""/>':'<div class="row-art-ph">&#127925;</div>')+'<div class="row-info"><div class="row-title">'+esc(s.title)+'</div><div class="row-artist">'+esc(s.artist)+'</div></div><button class="row-add" title="Remove">&#x2715;</button>';
-      div.querySelector('.row-add').onclick=e=>{e.stopPropagation();queue.splice(i,1);if(i<qIdx)qIdx--;renderQueue();};
+      div.innerHTML=(s.thumb?'<img class="row-art" src="'+s.thumb+'" alt=""/>':'<div class="row-art-ph">\ud83c\udfb5</div>')+'<div class="row-info"><div class="row-title">'+esc(s.title)+'</div><div class="row-artist">'+esc(s.artist)+'</div></div><button class="row-add" title="Remove">\u2715</button>';
+      const btn=div.querySelector('.row-add');
+      const idx=i;
+      btn.onclick=e=>{e.stopPropagation();queue.splice(idx,1);if(idx<qIdx)qIdx--;renderQueue();};
       rows.appendChild(div);
     });
     sec.appendChild(rows);
   }
   sa.appendChild(sec);
 }
-function renderSearchEmpty(){ge('scroll').innerHTML='<div class="empty" style="padding-top:36px"><div class="empty-ic" style="opacity:.1">&#8981;</div><div class="empty-t">Search anything</div><div class="empty-s">Type a song, artist, or mood above.</div></div>';}
+
+function renderSearchEmpty(){
+  ge('scroll').innerHTML='<div class="empty" style="padding-top:36px"><div class="empty-ic" style="opacity:.1">\u2315</div><div class="empty-t">Search anything</div><div class="empty-s">Type a song, artist, or mood above.</div></div>';
+}
 function onSearch(v){clearTimeout(searchTimer);if(!v.trim()){renderView();return;}searchTimer=setTimeout(()=>doSearch(v),380);}
-async function doSearch(q){if(!q.trim())return;showSkel();try{const songs=await ytSearch(q,24);const sa=ge('scroll');sa.innerHTML='';sa.appendChild(makeRows('"'+q+'"',songs));}catch(e){showErr(e.message);}}
+async function doSearch(q){
+  if(!q.trim())return;showSkel();
+  try{const songs=await ytSearch(q,24);const sa=ge('scroll');sa.innerHTML='';sa.appendChild(makeRows('"'+q+'"',songs));}
+  catch(e){showErr(e.message);}
+}
 function clearSearch(){ge('s-inp').value='';renderView();}
 
 function makeCards(title,songs){
@@ -481,9 +653,8 @@ function makeCards(title,songs){
   sec.innerHTML='<div class="sec-row"><span class="sec-h">'+title+'</span></div>';
   const hs=document.createElement('div');hs.className='hs';
   songs.forEach(s=>{
-    const div=document.createElement('div');div.className='card';
-    div.onclick=()=>playSong(s);
-    div.innerHTML='<div class="card-art">'+(s.thumb?'<img src="'+s.thumb+'" loading="lazy" alt=""/>':'<div class="card-art-ph">&#127925;</div>')+'<div class="card-ov"><div class="card-ov-btn">&#9654;</div></div>'+(s.id===currentId?'<span class="card-np">Playing</span>':'')+'</div><div class="card-title">'+esc(s.title)+'</div><div class="card-artist">'+esc(s.artist)+'</div>';
+    const div=document.createElement('div');div.className='card';div.onclick=()=>playSong(s);
+    div.innerHTML='<div class="card-art">'+(s.thumb?'<img src="'+s.thumb+'" loading="lazy" alt=""/>':'<div class="card-art-ph">\ud83c\udfb5</div>')+'<div class="card-ov"><div class="card-ov-btn">\u25b6</div></div>'+(s.id===currentId?'<span class="card-np">Playing</span>':'')+'</div><div class="card-title">'+esc(s.title)+'</div><div class="card-artist">'+esc(s.artist)+'</div>';
     hs.appendChild(div);
   });
   sec.appendChild(hs);return sec;
@@ -496,14 +667,14 @@ function makeRows(title,songs){
     const div=document.createElement('div');
     div.className='row'+(s.id===currentId?' np':'');
     div.onclick=()=>playSong(s);
-    div.innerHTML=(s.thumb?'<img class="row-art" src="'+s.thumb+'" loading="lazy" alt=""/>':'<div class="row-art-ph">&#127925;</div>')+'<div class="row-info"><div class="row-title">'+esc(s.title)+'</div><div class="row-artist">'+esc(s.artist)+'</div></div><button class="row-add" title="Add">+</button>';
+    div.innerHTML=(s.thumb?'<img class="row-art" src="'+s.thumb+'" loading="lazy" alt=""/>':'<div class="row-art-ph">\ud83c\udfb5</div>')+'<div class="row-info"><div class="row-title">'+esc(s.title)+'</div><div class="row-artist">'+esc(s.artist)+'</div></div><button class="row-add" title="Add">+</button>';
     div.querySelector('.row-add').onclick=e=>{e.stopPropagation();addQ(s);};
     rows.appendChild(div);
   });
   sec.appendChild(rows);return sec;
 }
 function showSkel(){ge('scroll').innerHTML='<div class="sec"><div style="height:22px;width:180px;background:var(--c2);border-radius:8px;animation:sk 1.4s ease infinite;margin-bottom:14px"></div></div><div class="sk-cards">'+Array(5).fill(0).map(()=>'<div class="sk-c"><div class="sk-ca"></div><div class="sk-cl"></div><div class="sk-cl2"></div></div>').join('')+'</div><div class="sec" style="padding-top:20px"><div class="sk-rows">'+Array(5).fill(0).map(()=>'<div class="sk-r"><div class="sk-th"></div><div class="sk-l"><div class="sk-l1"></div><div class="sk-l2"></div></div></div>').join('')+'</div></div>';}
-function showErr(msg){ge('scroll').innerHTML='<div class="empty"><div class="empty-ic">&#9888;</div><div class="empty-t">Something went wrong</div><div class="empty-s">'+esc(msg)+'</div></div>';}
+function showErr(msg){ge('scroll').innerHTML='<div class="empty"><div class="empty-ic">\u26a0</div><div class="empty-t">Something went wrong</div><div class="empty-s">'+esc(msg)+'</div></div>';}
 function toggleAcct(){acctOpen=!acctOpen;ge('acct-menu').classList.toggle('on',acctOpen);if(acctOpen)document.addEventListener('click',closeAcct,true);}
 function closeAcct(e){if(!ge('acct-menu').contains(e.target)&&e.target!==ge('user-av')){acctOpen=false;ge('acct-menu').classList.remove('on');document.removeEventListener('click',closeAcct,true);}}
 function toast(msg){const el=document.createElement('div');el.className='toast';el.textContent=msg;ge('tw').appendChild(el);setTimeout(()=>el.remove(),2800);}
@@ -513,9 +684,17 @@ const fmt=s=>{s=Math.floor(s||0);return Math.floor(s/60)+':'+String(s%60).padSta
 const esc=s=>(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 
 (function(){
-  const u=localStorage.getItem('melo_u'),t=localStorage.getItem('melo_t'),exp=parseInt(localStorage.getItem('melo_te')||'0');
-  if(u&&t&&Date.now()<exp){try{userInfo=JSON.parse(u);ytToken=t;liked=JSON.parse(localStorage.getItem('melo_liked_'+userInfo.email)||'[]');enterApp();return;}catch(e){}}
-  const wait=setInterval(()=>{if(window.google?.accounts?.id){clearInterval(wait);initGoogle();}},80);
+  const u=localStorage.getItem('melo_u');
+  if(u){
+    try{
+      userInfo=JSON.parse(u);
+      liked=JSON.parse(localStorage.getItem('melo_liked_'+userInfo.email)||'[]');
+      enterApp(); return;
+    }catch(e){}
+  }
+  const wait=setInterval(()=>{
+    if(window.google?.accounts?.id){clearInterval(wait);initGoogle();}
+  },80);
 })();
 </script>
 </body>
