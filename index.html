@@ -350,20 +350,49 @@ function onSignedIn(cr){
   liked = JSON.parse(localStorage.getItem('melo_liked_'+p.email)||'[]');
 
   // Request YouTube read access
+  initTokenClient();
+}
+
+function showTokenError(){
+  // Show a clear grant button on auth screen
+  ge('auth').classList.remove('out');
+  ge('app').classList.remove('on');
+  const existing = ge('grant-btn');
+  if(existing) existing.remove();
+  const btn = document.createElement('button');
+  btn.id = 'grant-btn';
+  btn.textContent = 'Grant YouTube Access';
+  btn.style.cssText = 'padding:14px 28px;background:var(--acc);color:#fff;border:none;border-radius:14px;font-family:Figtree,sans-serif;font-size:.95rem;font-weight:700;cursor:pointer;margin-top:4px;transition:opacity .15s;box-shadow:0 0 24px rgba(255,77,77,.3)';
+  btn.onmouseenter = ()=>btn.style.opacity='.8';
+  btn.onmouseleave = ()=>btn.style.opacity='1';
+  btn.onclick = ()=>{
+    btn.textContent = 'Opening Google...';
+    btn.disabled = true;
+    if(_tc) _tc.requestAccessToken({prompt:'consent'});
+    else initTokenClient();
+  };
+  ge('g-btn').appendChild(btn);
+}
+
+function initTokenClient(){
   _tc = google.accounts.oauth2.initTokenClient({
     client_id: CLIENT_ID,
     scope: 'https://www.googleapis.com/auth/youtube.readonly',
     callback: r => {
+      const btn = ge('grant-btn');
+      if(btn) btn.remove();
       if(r.access_token){
         ytToken = r.access_token;
         localStorage.setItem('melo_t', r.access_token);
         localStorage.setItem('melo_te', Date.now()+(r.expires_in||3600)*1000);
+        enterApp();
+      } else {
+        showTokenError();
       }
-      enterApp();
     },
-    error_callback: () => enterApp(),
+    error_callback: e => { console.error('Token error:', e); showTokenError(); },
   });
-  _tc.requestAccessToken({ prompt: 'consent' });
+  _tc.requestAccessToken({prompt:'consent'});
 }
 
 function enterApp(){
@@ -684,14 +713,20 @@ const fmt=s=>{s=Math.floor(s||0);return Math.floor(s/60)+':'+String(s%60).padSta
 const esc=s=>(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 
 (function(){
-  const u=localStorage.getItem('melo_u');
-  if(u){
+  const u   = localStorage.getItem('melo_u');
+  const t   = localStorage.getItem('melo_t');
+  const exp = parseInt(localStorage.getItem('melo_te')||'0');
+  if(u && t && Date.now() < exp){
     try{
-      userInfo=JSON.parse(u);
-      liked=JSON.parse(localStorage.getItem('melo_liked_'+userInfo.email)||'[]');
+      userInfo = JSON.parse(u);
+      ytToken  = t;
+      liked    = JSON.parse(localStorage.getItem('melo_liked_'+userInfo.email)||'[]');
       enterApp(); return;
     }catch(e){}
   }
+  // Clear stale token
+  localStorage.removeItem('melo_t');
+  localStorage.removeItem('melo_te');
   const wait=setInterval(()=>{
     if(window.google?.accounts?.id){clearInterval(wait);initGoogle();}
   },80);
