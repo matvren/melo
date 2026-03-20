@@ -321,7 +321,6 @@ body{font-family:"Figtree",sans-serif;background:var(--bg);color:var(--text);-we
 //  → Credentials → Create Credentials → API Key
 // ═══════════════════════════════════════════════════════
 const CLIENT_ID = '865372017316-1ir04ugkdhpd94leeh7gt7069ksl14h3.apps.googleusercontent.com';
-let YT_KEY = localStorage.getItem('melo_yk') || '';
 
 // ── State ─────────────────────────────────────────────
 let userInfo=null;
@@ -402,7 +401,6 @@ function enterApp(){
   ge('acct-email').textContent = userInfo.email;
   ge('auth').classList.add('out');
   ge('app').classList.add('on');
-  if(!YT_KEY){ showKeyPrompt(); return; }
   renderHome();
 }
 
@@ -419,57 +417,21 @@ function signOut(){
 }
 
 // ── API Key prompt (shown once if no key saved) ────────
-function showKeyPrompt(){
-  const sa=ge('scroll');
-  sa.innerHTML = '';
-  const wrap=document.createElement('div');
-  wrap.style.cssText='padding:32px 24px;display:flex;flex-direction:column;align-items:center;gap:16px;text-align:center';
-  wrap.innerHTML = `
-    <div style="font-size:2.5rem;opacity:.35">&#128273;</div>
-    <div style="font-size:1rem;font-weight:700;color:var(--t2)">Add YouTube API Key</div>
-    <div style="font-size:.82rem;color:var(--t3);line-height:1.65;max-width:260px">
-      Free key from <strong style="color:var(--t2)">console.cloud.google.com</strong><br>
-      &#8594; APIs &amp; Services &#8594; Library<br>
-      &#8594; YouTube Data API v3 &#8594; Enable<br>
-      &#8594; Credentials &#8594; API Key &#8594; Copy
-    </div>
-    <input id="yk-inp" type="text" placeholder="AIza..."
-      style="width:100%;max-width:300px;background:var(--c2);border:1px solid rgba(255,255,255,.15);border-radius:12px;color:var(--text);font-family:inherit;font-size:.85rem;padding:12px 16px;outline:none"
-      onkeydown="if(event.key==='Enter')saveKey()"/>
-    <button onclick="saveKey()"
-      style="background:var(--acc);border:none;border-radius:12px;color:#fff;font-family:inherit;font-weight:700;font-size:.9rem;padding:13px 32px;cursor:pointer;transition:opacity .15s;width:100%;max-width:300px">
-      Save &amp; Start Listening
-    </button>`;
-  sa.appendChild(wrap);
-}
 
-function saveKey(){
-  const val = ge('yk-inp')?.value?.trim();
-  if(!val || val.length < 10){ toast('Paste a valid API key'); return; }
-  YT_KEY = val;
-  localStorage.setItem('melo_yk', val);
-  toast('API key saved!');
-  renderHome();
-}
 
 // ── YouTube Data API (API key — no OAuth needed) ───────
 async function ytFetch(url){
-  let r;
-  if(ytToken){
-    // Use OAuth bearer token (from Google sign-in) - no API key needed
-    r = await fetch(url, { headers:{ Authorization:'Bearer '+ytToken } });
-    if(r.status===401){
-      ytToken=null;
-      localStorage.removeItem('melo_t');
-      if(_tc) _tc.requestAccessToken({prompt:'consent'});
-      throw new Error('Session expired — signing you in again');
-    }
-  } else if(YT_KEY){
-    // Fallback: API key
-    const sep = url.includes('?') ? '&' : '?';
-    r = await fetch(url + sep + 'key=' + YT_KEY);
-  } else {
-    throw new Error('No YouTube access yet. Please sign out and sign back in.');
+  if(!ytToken){
+    showTokenError();
+    throw new Error('Sign in and grant YouTube access first');
+  }
+  const r = await fetch(url, { headers:{ Authorization:'Bearer '+ytToken } });
+  if(r.status === 401){
+    ytToken = null;
+    localStorage.removeItem('melo_t');
+    localStorage.removeItem('melo_te');
+    showTokenError();
+    throw new Error('Session expired — tap Grant YouTube Access');
   }
   const d = await r.json();
   if(d.error) throw new Error(d.error.message);
@@ -605,7 +567,7 @@ async function renderHome(){
     if(sa.children.length<=1)showErr('Could not load songs. Check your YouTube API key.');
   }catch(e){
     if(e.message.includes('API key')||e.message.includes('keyInvalid')){
-      YT_KEY='';localStorage.removeItem('melo_yk');showKeyPrompt();
+      
     } else {
       showErr(e.message);
     }
