@@ -125,13 +125,15 @@ body { font-family: Figtree, sans-serif; background: var(--bg); color: var(--t);
 .card { flex-shrink: 0; width: 136px; cursor: pointer; }
 .card:active { opacity: .7; }
 .card-img {
-  width: 136px; height: 136px; border-radius: 11px;
+  width: 136px; height: 136px; min-height: 136px; border-radius: 11px;
   overflow: hidden; background: var(--c2);
   position: relative; margin-bottom: 9px;
+  flex-shrink: 0; aspect-ratio: 1/1;
 }
 .card-img img {
-  width: 100%; height: 100%; object-fit: cover;
+  width: 136px; height: 136px; object-fit: cover;
   display: block; transition: transform .22s;
+  aspect-ratio: 1/1;
 }
 .card:hover .card-img img { transform: scale(1.04); }
 .card-img-ph { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; font-size: 2.8rem; }
@@ -167,9 +169,10 @@ body { font-family: Figtree, sans-serif; background: var(--bg); color: var(--t);
 .row:active { opacity: .6; }
 .row.np .row-name { color: var(--acc); }
 .row-img {
-  width: 50px; height: 50px; border-radius: 9px;
-  object-fit: cover; flex-shrink: 0; background: var(--c2);
-  display: block;
+  width: 50px; height: 50px; min-width: 50px; min-height: 50px;
+  border-radius: 9px; object-fit: cover;
+  flex-shrink: 0; background: var(--c2);
+  display: block; aspect-ratio: 1/1;
 }
 .row-img-ph {
   width: 50px; height: 50px; border-radius: 9px;
@@ -318,15 +321,14 @@ body { font-family: Figtree, sans-serif; background: var(--bg); color: var(--t);
 .fp-img {
   width: calc(100vw - 72px);
   max-width: 310px;
-  height: calc(100vw - 72px);
-  max-height: 310px;
+  aspect-ratio: 1/1;
   border-radius: 24px; object-fit: cover; display: block;
   position: relative; z-index: 3;
   box-shadow: 0 16px 56px rgba(0,0,0,.7);
 }
 .fp-img-ph {
   width: calc(100vw - 72px); max-width: 310px;
-  height: calc(100vw - 72px); max-height: 310px;
+  aspect-ratio: 1/1;
   border-radius: 24px; background: var(--c2);
   display: flex; align-items: center; justify-content: center;
   font-size: 4.5rem; position: relative; z-index: 3;
@@ -669,24 +671,39 @@ async function ytq(url){
 }
 
 // Search MUSIC ONLY — using music topic filters and official artist channel filtering
+// All searches go through YouTube Data API with music filters
+// videoCategoryId=10 = Music, topicId=/m/04rlf = Music topic
 async function searchMusic(q, n=20){
-  // Use topicId for music + videoCategoryId=10 + type=video
-  // Also append "official audio" or "lyrics" tends to avoid videos
-  const url = YTM+'/search?part=snippet&type=video&videoCategoryId=10'+
-    '&topicId=/m/04rlf'+  // Music topic
-    '&q='+encodeURIComponent(q)+
-    '&maxResults='+n+'&regionCode=US&order=relevance';
+  const url = YTM+'/search?part=snippet&type=video'
+    +'&videoCategoryId=10'
+    +'&topicId=/m/04rlf'
+    +'&q='+encodeURIComponent(q)
+    +'&maxResults='+n+'&regionCode=US';
   const d = await ytq(url);
   return (d.items||[]).map(itToSong);
 }
 
-async function searchArtist(q, n=20){
-  // Search without category restriction for artist queries
-  const url = YTM+'/search?part=snippet&type=video'+
-    '&q='+encodeURIComponent(q+' official audio')+
-    '&maxResults='+n+'&regionCode=US';
-  const d = await ytq(url);
-  return (d.items||[]).map(itToSong);
+// For explicit artist/song searches — search channels and videos both
+async function searchArtist(q, n=24){
+  // Search for videos matching the query in music category
+  const vidUrl = YTM+'/search?part=snippet&type=video'
+    +'&videoCategoryId=10'
+    +'&q='+encodeURIComponent(q)
+    +'&maxResults='+n+'&regionCode=US&order=relevance';
+  const d = await ytq(vidUrl);
+  const results = (d.items||[]).map(itToSong);
+
+  // Also try searching for the artist's channel to get official content
+  // by appending common suffixes that bring up official channels
+  if(results.length < 8){
+    const d2 = await ytq(YTM+'/search?part=snippet&type=video'
+      +'&q='+encodeURIComponent(q+' official')
+      +'&maxResults='+n+'&regionCode=US');
+    const more = (d2.items||[]).map(itToSong)
+      .filter(s=>!results.some(r=>r.id===s.id));
+    results.push(...more);
+  }
+  return results;
 }
 
 function itToSong(it){
@@ -1011,11 +1028,55 @@ function onSrch(v){ clearTimeout(stmr); if(!v.trim()){renderView();return;} stmr
 async function doSrch(q){
   if(!q.trim()) return; skel();
   try{
-    // Use broader search for artist queries, music-filtered for general
-    const songs = await searchArtist(q, 24);
-    const sa=ge('scroll'); sa.innerHTML='';
-    if(songs.length){ sa.appendChild(mkRows('"'+q+'"', songs)); }
-    else { showErr('No results for "'+q+'"'); }
+    const sa = ge('scroll'); sa.innerHTML='';
+
+    // Fetch videos, artists (channels), and playlists in parallel
+    const [vids, chans, plists] = await Promise.allSettled([
+      ytq(YTM+'/search?part=snippet&type=video&videoCategoryId=10'
+        +'&q='+encodeURIComponent(q)+'&maxResults=20&regionCode=US'),
+      ytq(YTM+'/search?part=snippet&type=channel'
+        +'&q='+encodeURIComponent(q)+'&maxResults=6&regionCode=US'),
+      ytq(YTM+'/search?part=snippet&type=playlist'
+        +'&q='+encodeURIComponent(q)+'&maxResults=6&regionCode=US'),
+    ]);
+
+    let hasContent = false;
+
+    // Artists / Channels
+    if(chans.status==='fulfilled' && chans.value.items?.length){
+      const artists = chans.value.items.map(it=>({
+        id:     it.id.channelId,
+        title:  clean(it.snippet.title),
+        artist: 'Artist',
+        thumb:  it.snippet.thumbnails?.high?.url || it.snippet.thumbnails?.medium?.url || '',
+        isArtist: true,
+      }));
+      sa.appendChild(mkCards('Artists', artists));
+      hasContent = true;
+    }
+
+    // Albums / Playlists
+    if(plists.status==='fulfilled' && plists.value.items?.length){
+      const albums = plists.value.items.map(it=>({
+        id:     it.id.playlistId,
+        title:  clean(it.snippet.title),
+        artist: clean(it.snippet.channelTitle).replace(/ - Topic$/,'').replace(/VEVO$/,''),
+        thumb:  it.snippet.thumbnails?.high?.url || it.snippet.thumbnails?.medium?.url || '',
+        isPlaylist: true,
+      }));
+      sa.appendChild(mkCards('Albums & Playlists', albums));
+      hasContent = true;
+    }
+
+    // Songs
+    if(vids.status==='fulfilled' && vids.value.items?.length){
+      const songs = vids.value.items.map(itToSong);
+      sa.appendChild(mkRows('Songs', songs));
+      hasContent = true;
+    }
+
+    if(!hasContent) showErr('No results found for "'+q+'"');
+
   }catch(e){ showErr(e.message); }
 }
 function clrSrch(){ ge('sinp').value=''; renderView(); }
@@ -1029,7 +1090,16 @@ function mkCards(title, songs){
   const hs=document.createElement('div'); hs.className='hscroll';
   songs.forEach(song=>{
     const card=document.createElement('div'); card.className='card';
-    card.onclick=()=>playSong(song);
+    card.onclick=()=>{
+      if(song.isArtist){
+        ge('sinp').value=song.title;
+        doSrch(song.title);
+      } else if(song.isPlaylist){
+        openPl(song.id, song.title);
+      } else {
+        playSong(song);
+      }
+    };
     const art=document.createElement('div'); art.className='card-img';
     if(song.thumb){
       const img=document.createElement('img'); img.src=song.thumb; img.alt=''; img.loading='lazy'; art.appendChild(img);
